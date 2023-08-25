@@ -6,6 +6,7 @@ use futures::channel::{
     mpsc::{unbounded, UnboundedReceiver},
     oneshot::channel,
 };
+use serde::Deserialize;
 use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, HtmlImageElement, KeyboardEvent};
 
@@ -95,7 +96,7 @@ impl GameLoop {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Rect {
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -103,7 +104,14 @@ pub(crate) struct Rect {
     pub(crate) height: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+impl Rect {
+    pub(crate) fn intersects(&self, rect: &Rect) -> bool {
+        (self.x < (rect.x + rect.width) && self.x + self.width > rect.x)
+            && (self.y < (rect.y + rect.height) && self.y + self.height > rect.y)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Point {
     pub x: i16,
     pub y: i16,
@@ -124,12 +132,7 @@ impl Renderer {
         )
     }
 
-    pub(crate) fn draw_image(
-        &self,
-        image: &HtmlImageElement,
-        frame: &Rect,
-        destination: &Rect,
-    ) -> Result<()> {
+    pub(crate) fn draw_image(&self, image: &HtmlImageElement, frame: &Rect, destination: &Rect) {
         self.context
             .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                 image,
@@ -142,8 +145,22 @@ impl Renderer {
                 destination.width.into(),
                 destination.height.into(),
             )
-            .map_err(|err| anyhow!("error drawing image: {err:#?}"))?;
-        Ok(())
+            .expect("error drawing image");
+    }
+
+    pub(crate) fn draw_entire_image(&self, image: &HtmlImageElement, position: Point) {
+        self.context
+            .draw_image_with_html_image_element(image, position.x.into(), position.y.into())
+            .expect("error drawing image");
+    }
+
+    pub(crate) fn draw_rect(&self, rect: &Rect) {
+        self.context.stroke_rect(
+            rect.x.into(),
+            rect.y.into(),
+            rect.width.into(),
+            rect.height.into(),
+        );
     }
 }
 
@@ -211,4 +228,56 @@ impl KeyState {
     fn set_released(&mut self, code: &str) {
         self.pressed_keys.remove(code);
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Image {
+    element: HtmlImageElement,
+    position: Point,
+    bounding_box: Rect,
+}
+
+impl Image {
+    pub(crate) fn new(element: HtmlImageElement, position: Point) -> Self {
+        let bounding_box = Rect {
+            x: position.x.into(),
+            y: position.y.into(),
+            width: element.width() as f32,
+            height: element.height() as f32,
+        };
+        Self {
+            element,
+            position,
+            bounding_box,
+        }
+    }
+
+    pub(crate) fn bounding_box(&self) -> &Rect {
+        &self.bounding_box
+    }
+
+    pub(crate) fn draw(&self, renderer: &Renderer) {
+        renderer.draw_entire_image(&self.element, self.position);
+        renderer.draw_rect(&self.bounding_box);
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct Sheet {
+    pub(crate) frames: HashMap<String, Cell>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+pub(crate) struct SheetRect {
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) w: u16,
+    pub(crate) h: u16,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Cell {
+    pub(crate) frame: SheetRect,
+    pub(crate) sprite_source_size: SheetRect,
 }
