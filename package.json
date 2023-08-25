@@ -1,6 +1,6 @@
 {
-  "author": "You <you@example.com>",
-  "name": "rust-webpack-template",
+  "author": "gifnksm <makoto.nksm@gmail.com>",
+  "name": "walk-the-dog",
   "version": "0.1.0",
   "scripts": {
     "build": "rimraf dist pkg && webpack",
