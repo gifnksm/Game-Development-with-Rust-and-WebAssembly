@@ -7,7 +7,8 @@ use wasm_bindgen::{
 };
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    CanvasRenderingContext2d, Document, HtmlCanvasElement, HtmlImageElement, Response, Window,
+    CanvasRenderingContext2d, Document, Element, HtmlCanvasElement, HtmlElement, HtmlImageElement,
+    Response, Window,
 };
 
 macro_rules! log {
@@ -119,4 +120,40 @@ pub(crate) fn now() -> Result<f64> {
         .performance()
         .ok_or_else(|| anyhow!("performance object not found"))?
         .now())
+}
+
+pub(crate) fn find_html_element_by_id(id: &str) -> Result<HtmlElement> {
+    let doc = document()?;
+    let element = doc
+        .get_element_by_id(id)
+        .ok_or_else(|| anyhow!("element with id {id} not found"))?;
+    element
+        .dyn_into()
+        .map_err(|err| anyhow!("error converting to `HtmlElement`: {err:#?}"))
+}
+
+fn find_ui() -> Result<Element> {
+    let doc = document()?;
+    let ui = doc
+        .get_element_by_id("ui")
+        .ok_or_else(|| anyhow!("UI element not found"))?;
+    Ok(ui)
+}
+
+pub(crate) fn draw_ui(html: &str) -> Result<()> {
+    let ui = find_ui()?;
+    ui.insert_adjacent_html("afterbegin", html)
+        .map_err(|err| anyhow!("error inserting HTML: {err:#?}"))
+}
+
+pub(crate) fn hide_ui() -> Result<()> {
+    let ui = find_ui()?;
+    if let Some(child) = ui.first_child() {
+        ui.remove_child(&child)
+            .map_err(|err| anyhow!("error removing child: {err:#?}"))?;
+        canvas()?
+            .focus()
+            .map_err(|err| anyhow!("error focusing canvas: {err:#?}"))?;
+    }
+    Ok(())
 }

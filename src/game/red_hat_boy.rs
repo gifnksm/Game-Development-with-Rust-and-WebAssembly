@@ -27,12 +27,23 @@ impl RedHatBoy {
         }
     }
 
+    pub(super) fn reset(boy: Self) -> Self {
+        let frame = boy.state_machine.as_frame();
+        let audio = frame.audio().clone();
+        let jump_sound = frame.jump_sound().clone();
+        Self::new(boy.sprite_sheet, boy.image, audio, jump_sound)
+    }
+
     pub(super) fn walking_speed(&self) -> i16 {
         self.state_machine.as_frame().walking_speed()
     }
 
     pub(super) fn velocity_y(&self) -> i16 {
         self.state_machine.as_frame().velocity_y()
+    }
+
+    pub(super) fn knocked_out(&self) -> bool {
+        self.state_machine.knocked_out()
     }
 
     pub(super) fn update(&mut self) {
@@ -117,6 +128,8 @@ trait Frame {
     fn position(&self) -> Point;
     fn velocity_y(&self) -> i16;
     fn walking_speed(&self) -> i16;
+    fn audio(&self) -> &Audio;
+    fn jump_sound(&self) -> &Sound;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +162,10 @@ impl StateMachine {
             Self::Falling(state) => state,
             Self::KnockedOut(state) => state,
         }
+    }
+
+    fn knocked_out(&self) -> bool {
+        matches!(self, Self::KnockedOut(_))
     }
 
     fn transition(self, event: Event) -> Self {
@@ -228,6 +245,14 @@ mod states {
 
         fn walking_speed(&self) -> i16 {
             self.context.velocity.x
+        }
+
+        fn audio(&self) -> &Audio {
+            &self.context.audio
+        }
+
+        fn jump_sound(&self) -> &Sound {
+            &self.context.jump_sound
         }
     }
 

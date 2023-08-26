@@ -14,7 +14,8 @@ use futures::channel::{
 use serde::Deserialize;
 use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
 use web_sys::{
-    AudioBuffer, AudioContext, CanvasRenderingContext2d, HtmlImageElement, KeyboardEvent,
+    AudioBuffer, AudioContext, CanvasRenderingContext2d, HtmlElement, HtmlImageElement,
+    KeyboardEvent,
 };
 
 use crate::{
@@ -410,4 +411,14 @@ impl Audio {
     pub(crate) fn play_looping_sound(&self, sound: &Sound) -> Result<()> {
         sound::play_sound(&self.context, &sound.buffer, Looping::Yes)
     }
+}
+
+pub(crate) fn add_click_handler(elem: HtmlElement) -> UnboundedReceiver<()> {
+    let (mut click_sender, click_receiver) = unbounded();
+    let on_click = browser::closure_wrap(Box::new(move || {
+        click_sender.start_send(());
+    }) as Box<dyn FnMut()>);
+    elem.set_onclick(Some(on_click.as_ref().unchecked_ref()));
+    on_click.forget();
+    click_receiver
 }
