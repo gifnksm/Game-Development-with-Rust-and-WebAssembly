@@ -70,26 +70,26 @@ impl Game for WalkTheDog {
         match self {
             Self::Loading => {
                 let audio = Audio::new()?;
-                let background_music = audio.load_sound("background_song.mp3").await?;
+                let background_music = audio.load_sound("sounds/background_song.mp3").await?;
                 audio.play_looping_sound(&background_music)?;
 
-                let rhb_json = browser::fetch_json("rhb.json").await?;
+                let rhb_json = browser::fetch_json("sprites_sheets/rhb.json").await?;
                 let rhb_sheet: Sheet = serde_wasm_bindgen::from_value(rhb_json).map_err(|err| {
                     anyhow!("could not convert `rhb.json` into a `Sheet` structure: {err:#?}")
                 })?;
-                let image = engine::load_image("rhb.png").await?;
-                let sound = audio.load_sound("SFX_Jump_23.mp3").await?;
+                let image = engine::load_image("sprites_sheets/rhb.png").await?;
+                let sound = audio.load_sound("sounds/SFX_Jump_23.mp3").await?;
                 let rhb = RedHatBoy::new(rhb_sheet, image, audio, sound);
 
-                let background = engine::load_image("BG.png").await?;
-                let stone = engine::load_image("Stone.png").await?;
+                let background = engine::load_image("images/BG.png").await?;
+                let stone = engine::load_image("images/Stone.png").await?;
 
-                let obstacle_json = browser::fetch_json("tiles.json").await?;
+                let obstacle_json = browser::fetch_json("sprites_sheets/tiles.json").await?;
                 let obstacle_sheet = Rc::new(SpriteSheet::new(
                     serde_wasm_bindgen::from_value(obstacle_json).map_err(|err| {
                         anyhow!("could not convert `tiles.json` into a `Sheet` structure: {err:#?}")
                     })?,
-                    engine::load_image("tiles.png").await?,
+                    engine::load_image("sprites_sheets/tiles.png").await?,
                 ));
 
                 let background_width = background.width() as i16;
