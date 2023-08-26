@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Mutex};
+use std::{
+    cell::{self, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Mutex,
+};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -66,9 +71,7 @@ impl GameLoop {
             accumulated_delta: 0.0,
         };
 
-        let renderer = Renderer {
-            context: browser::context()?,
-        };
+        let renderer = Renderer::new(browser::context()?);
 
         let f = Rc::new(RefCell::new(None));
         let g = Rc::clone(&f);
@@ -96,22 +99,65 @@ impl GameLoop {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Rect {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) width: f32,
-    pub(crate) height: f32,
+    pub(crate) position: Point,
+    pub(crate) width: i16,
+    pub(crate) height: i16,
 }
 
 impl Rect {
-    pub(crate) fn intersects(&self, rect: &Rect) -> bool {
-        (self.x < (rect.x + rect.width) && self.x + self.width > rect.x)
-            && (self.y < (rect.y + rect.height) && self.y + self.height > rect.y)
+    pub(crate) const fn new(position: Point, width: i16, height: i16) -> Self {
+        Self {
+            position,
+            width,
+            height,
+        }
+    }
+
+    pub(crate) const fn from_xy(x: i16, y: i16, width: i16, height: i16) -> Self {
+        Rect::new(Point { x, y }, width, height)
+    }
+
+    pub(crate) const fn intersects(&self, rect: &Rect) -> bool {
+        (self.left() < rect.right() && self.right() > rect.left())
+            && (self.top() < rect.bottom() && self.bottom() > rect.top())
+    }
+
+    pub(crate) const fn x(&self) -> i16 {
+        self.position.x
+    }
+
+    pub(crate) fn set_x(&mut self, x: i16) {
+        self.position.x = x;
+    }
+
+    pub(crate) const fn y(&self) -> i16 {
+        self.position.y
+    }
+
+    pub(crate) fn set_y(&mut self, y: i16) {
+        self.position.y = y;
+    }
+
+    pub(crate) const fn left(&self) -> i16 {
+        self.x()
+    }
+
+    pub(crate) const fn right(&self) -> i16 {
+        self.x() + self.width
+    }
+
+    pub(crate) const fn top(&self) -> i16 {
+        self.y()
+    }
+
+    pub(crate) const fn bottom(&self) -> i16 {
+        self.y() + self.height
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Point {
     pub x: i16,
     pub y: i16,
@@ -120,13 +166,25 @@ pub(crate) struct Point {
 #[derive(Debug)]
 pub(crate) struct Renderer {
     context: CanvasRenderingContext2d,
+    debug_mode: cell::Cell<bool>,
 }
 
 impl Renderer {
+    fn new(context: CanvasRenderingContext2d) -> Self {
+        Self {
+            context,
+            debug_mode: cell::Cell::new(false),
+        }
+    }
+
+    pub(crate) fn set_debug_mode(&self, debug_mode: bool) {
+        self.debug_mode.set(debug_mode);
+    }
+
     pub(crate) fn clear(&self, rect: &Rect) {
         self.context.clear_rect(
-            rect.x.into(),
-            rect.y.into(),
+            rect.x().into(),
+            rect.y().into(),
             rect.width.into(),
             rect.height.into(),
         )
@@ -136,12 +194,12 @@ impl Renderer {
         self.context
             .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                 image,
-                frame.x.into(),
-                frame.y.into(),
+                frame.x().into(),
+                frame.y().into(),
                 frame.width.into(),
                 frame.height.into(),
-                destination.x.into(),
-                destination.y.into(),
+                destination.x().into(),
+                destination.y().into(),
                 destination.width.into(),
                 destination.height.into(),
             )
@@ -154,16 +212,19 @@ impl Renderer {
             .expect("error drawing image");
     }
 
-    pub(crate) fn draw_rect(&self, rect: &Rect) {
-        self.context.stroke_rect(
-            rect.x.into(),
-            rect.y.into(),
-            rect.width.into(),
-            rect.height.into(),
-        );
+    pub(crate) fn draw_bounding_box(&self, rect: &Rect) {
+        if self.debug_mode.get() {
+            self.context.stroke_rect(
+                rect.x().into(),
+                rect.y().into(),
+                rect.width.into(),
+                rect.height.into(),
+            );
+        }
     }
 }
 
+#[derive(Debug, Clone)]
 enum KeyPress {
     KeyUp(KeyboardEvent),
     KeyDown(KeyboardEvent),
@@ -222,10 +283,12 @@ impl KeyState {
     }
 
     fn set_pressed(&mut self, code: &str, event: KeyboardEvent) {
+        log!("pressed: {:?}", code);
         self.pressed_keys.insert(code.into(), event);
     }
 
     fn set_released(&mut self, code: &str) {
+        log!("released: {:?}", code);
         self.pressed_keys.remove(code);
     }
 }
@@ -233,32 +296,40 @@ impl KeyState {
 #[derive(Debug, Clone)]
 pub(crate) struct Image {
     element: HtmlImageElement,
-    position: Point,
     bounding_box: Rect,
 }
 
 impl Image {
     pub(crate) fn new(element: HtmlImageElement, position: Point) -> Self {
-        let bounding_box = Rect {
-            x: position.x.into(),
-            y: position.y.into(),
-            width: element.width() as f32,
-            height: element.height() as f32,
-        };
+        let bounding_box = Rect::new(
+            position,
+            element.width().try_into().unwrap(),
+            element.height().try_into().unwrap(),
+        );
         Self {
             element,
-            position,
             bounding_box,
         }
+    }
+
+    pub(crate) fn right(&self) -> i16 {
+        self.bounding_box.right()
     }
 
     pub(crate) fn bounding_box(&self) -> &Rect {
         &self.bounding_box
     }
 
+    pub(crate) fn set_x(&mut self, x: i16) {
+        self.bounding_box.set_x(x);
+    }
+
+    pub(crate) fn move_horizontally(&mut self, distance: i16) {
+        self.bounding_box.set_x(self.bounding_box.x() + distance);
+    }
+
     pub(crate) fn draw(&self, renderer: &Renderer) {
-        renderer.draw_entire_image(&self.element, self.position);
-        renderer.draw_rect(&self.bounding_box);
+        renderer.draw_entire_image(&self.element, self.bounding_box.position);
     }
 }
 
@@ -269,10 +340,10 @@ pub(crate) struct Sheet {
 
 #[derive(Debug, Deserialize, Clone, Copy)]
 pub(crate) struct SheetRect {
-    pub(crate) x: u16,
-    pub(crate) y: u16,
-    pub(crate) w: u16,
-    pub(crate) h: u16,
+    pub(crate) x: i16,
+    pub(crate) y: i16,
+    pub(crate) w: i16,
+    pub(crate) h: i16,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy)]
@@ -280,4 +351,24 @@ pub(crate) struct SheetRect {
 pub(crate) struct Cell {
     pub(crate) frame: SheetRect,
     pub(crate) sprite_source_size: SheetRect,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SpriteSheet {
+    sheet: Sheet,
+    image: HtmlImageElement,
+}
+
+impl SpriteSheet {
+    pub(crate) fn new(sheet: Sheet, image: HtmlImageElement) -> Self {
+        Self { sheet, image }
+    }
+
+    pub(crate) fn cell(&self, name: &str) -> Option<&Cell> {
+        self.sheet.frames.get(name)
+    }
+
+    pub(crate) fn draw(&self, renderer: &Renderer, source: &Rect, destination: &Rect) {
+        renderer.draw_image(&self.image, source, destination);
+    }
 }

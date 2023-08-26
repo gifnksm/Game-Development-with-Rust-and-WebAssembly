@@ -22,8 +22,8 @@ impl RedHatBoy {
         }
     }
 
-    pub(super) fn pos_y(&self) -> i16 {
-        self.state_machine.as_frame().position().y
+    pub(super) fn walking_speed(&self) -> i16 {
+        self.state_machine.as_frame().walking_speed()
     }
 
     pub(super) fn velocity_y(&self) -> i16 {
@@ -44,13 +44,13 @@ impl RedHatBoy {
     }
 
     pub(super) fn bounding_box(&self) -> Rect {
-        const X_OFFSET: f32 = 18.0;
-        const Y_OFFSET: f32 = 14.0;
-        const WIDTH_OFFSET: f32 = 28.0;
+        const X_OFFSET: i16 = 18;
+        const Y_OFFSET: i16 = 14;
+        const WIDTH_OFFSET: i16 = 28;
         let mut bounding_box = self.destination_box();
-        bounding_box.x += X_OFFSET;
+        bounding_box.set_x(bounding_box.x() + X_OFFSET);
         bounding_box.width -= WIDTH_OFFSET;
-        bounding_box.y += Y_OFFSET;
+        bounding_box.set_y(bounding_box.y() + Y_OFFSET);
         bounding_box.height -= Y_OFFSET;
         bounding_box
     }
@@ -59,27 +59,27 @@ impl RedHatBoy {
         let frame = self.state_machine.as_frame();
         let sprite = self.current_sprite().expect("cell not found");
 
-        Rect {
-            x: (frame.position().x + sprite.sprite_source_size.x as i16).into(),
-            y: (frame.position().y + sprite.sprite_source_size.y as i16).into(),
-            width: sprite.frame.w.into(),
-            height: sprite.frame.h.into(),
-        }
+        Rect::from_xy(
+            frame.position().x + sprite.sprite_source_size.x,
+            frame.position().y + sprite.sprite_source_size.y,
+            sprite.frame.w,
+            sprite.frame.h,
+        )
     }
 
     pub(super) fn draw(&self, renderer: &Renderer) {
         let sprite = self.current_sprite().expect("cell not found");
         renderer.draw_image(
             &self.image,
-            &Rect {
-                x: sprite.frame.x.into(),
-                y: sprite.frame.y.into(),
-                width: sprite.frame.w.into(),
-                height: sprite.frame.h.into(),
-            },
+            &Rect::from_xy(
+                sprite.frame.x,
+                sprite.frame.y,
+                sprite.frame.w,
+                sprite.frame.h,
+            ),
             &self.destination_box(),
         );
-        renderer.draw_rect(&self.bounding_box());
+        renderer.draw_bounding_box(&self.bounding_box());
     }
 
     pub(super) fn run_right(&mut self) {
@@ -94,7 +94,7 @@ impl RedHatBoy {
         self.state_machine = self.state_machine.transition(Event::Jump);
     }
 
-    pub(super) fn land_on(&mut self, position: f32) {
+    pub(super) fn land_on(&mut self, position: i16) {
         self.state_machine = self.state_machine.transition(Event::Land { position });
     }
 
@@ -108,6 +108,7 @@ trait Frame {
     fn frame(&self) -> u8;
     fn position(&self) -> Point;
     fn velocity_y(&self) -> i16;
+    fn walking_speed(&self) -> i16;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -115,7 +116,7 @@ enum Event {
     Run,
     Slide,
     Jump,
-    Land { position: f32 },
+    Land { position: i16 },
     KnockOut,
     Update,
 }
@@ -147,6 +148,7 @@ impl StateMachine {
             (Self::Idle(state), Event::Run) => state.run(),
 
             (Self::Running(state), Event::Slide) => state.slide(),
+            (Self::Sliding(state), Event::Slide) => state.slide(),
 
             (Self::Running(state), Event::Jump) => state.jump(),
 
@@ -212,6 +214,10 @@ mod states {
         fn velocity_y(&self) -> i16 {
             self.context.velocity.y
         }
+
+        fn walking_speed(&self) -> i16 {
+            self.context.velocity.x
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -245,6 +251,7 @@ mod states {
                         y: FLOOR,
                     },
                     velocity: Point { x: 0, y: 0 },
+                    hold_state: false,
                 },
                 _state: Idle,
             }
@@ -292,11 +299,8 @@ mod states {
             .into()
         }
 
-        pub(super) fn land_on(mut self, position: f32) -> StateMachine {
-            self.context = self
-                .context
-                .set_on(position as i16)
-                .set_vertical_velocity(0);
+        pub(super) fn land_on(mut self, position: i16) -> StateMachine {
+            self.context = self.context.set_on(position).set_vertical_velocity(0);
             self.into()
         }
 
@@ -314,13 +318,19 @@ mod states {
 
     impl State<Sliding> {
         pub(super) fn update(mut self) -> StateMachine {
+            let hold_state = self.context.hold_state;
             self.context = self.context.update();
 
-            if self.context.is_frames_end() {
+            if !hold_state && self.context.is_frames_end() {
                 self.stand()
             } else {
                 self.into()
             }
+        }
+
+        pub(super) fn slide(mut self) -> StateMachine {
+            self.context.hold_state = true;
+            self.into()
         }
 
         fn stand(self) -> StateMachine {
@@ -331,11 +341,8 @@ mod states {
             .into()
         }
 
-        pub(super) fn land_on(mut self, position: f32) -> StateMachine {
-            self.context = self
-                .context
-                .set_on(position as i16)
-                .set_vertical_velocity(0);
+        pub(super) fn land_on(mut self, position: i16) -> StateMachine {
+            self.context = self.context.set_on(position).set_vertical_velocity(0);
             self.into()
         }
 
@@ -355,18 +362,18 @@ mod states {
         pub(super) fn update(mut self) -> StateMachine {
             self.context = self.context.update();
             if self.context.position.y >= FLOOR {
-                self.land_on(HEIGHT.into())
+                self.land_on(HEIGHT)
             } else {
                 self.into()
             }
         }
 
-        pub(super) fn land_on(self, position: f32) -> StateMachine {
+        pub(super) fn land_on(self, position: i16) -> StateMachine {
             State {
                 context: self
                     .context
                     .reset_frame(&RUN)
-                    .set_on(position as i16)
+                    .set_on(position)
                     .set_vertical_velocity(0),
                 _state: Running,
             }
@@ -395,11 +402,8 @@ mod states {
             }
         }
 
-        pub(super) fn land_on(mut self, position: f32) -> StateMachine {
-            self.context = self
-                .context
-                .set_on(position as i16)
-                .set_vertical_velocity(0);
+        pub(super) fn land_on(mut self, position: i16) -> StateMachine {
+            self.context = self.context.set_on(position).set_vertical_velocity(0);
             self.into()
         }
 
@@ -421,6 +425,7 @@ mod states {
         frame: u8,
         position: Point,
         velocity: Point,
+        hold_state: bool,
     }
 
     impl Context {
@@ -429,6 +434,7 @@ mod states {
         }
 
         fn update(mut self) -> Self {
+            self.hold_state = false;
             if self.frame < self.frame_config.frames {
                 self.frame += 1;
             } else {
@@ -439,7 +445,6 @@ mod states {
                 self.velocity.y += GRAVITY;
             }
 
-            self.position.x += self.velocity.x;
             self.position.y += self.velocity.y;
             if self.position.y > FLOOR {
                 self.position.y = FLOOR;
