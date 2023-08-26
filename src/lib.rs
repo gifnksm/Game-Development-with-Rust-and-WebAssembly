@@ -7,6 +7,7 @@ mod browser;
 mod engine;
 mod game;
 mod segments;
+mod sound;
 
 // This is like the `main` function, except for JavaScript.
 #[wasm_bindgen(start)]

@@ -1,6 +1,6 @@
 use web_sys::HtmlImageElement;
 
-use crate::engine::{Cell, Point, Rect, Renderer};
+use crate::engine::{Audio, Cell, Point, Rect, Renderer, Sound};
 
 use self::states::{Falling, Idle, Jumping, KnockedOut, Running, Sliding, State};
 
@@ -14,9 +14,14 @@ pub(crate) struct RedHatBoy {
 }
 
 impl RedHatBoy {
-    pub(super) fn new(sheet: Sheet, image: HtmlImageElement) -> Self {
+    pub(super) fn new(
+        sheet: Sheet,
+        image: HtmlImageElement,
+        audio: Audio,
+        jump_sound: Sound,
+    ) -> Self {
         Self {
-            state_machine: State::new().into(),
+            state_machine: State::new(audio, jump_sound).into(),
             sprite_sheet: sheet,
             image,
         }
@@ -31,7 +36,7 @@ impl RedHatBoy {
     }
 
     pub(super) fn update(&mut self) {
-        self.state_machine = self.state_machine.update();
+        self.state_machine = self.state_machine.clone().update();
     }
 
     fn frame_name(&self) -> String {
@@ -83,23 +88,26 @@ impl RedHatBoy {
     }
 
     pub(super) fn run_right(&mut self) {
-        self.state_machine = self.state_machine.transition(Event::Run);
+        self.state_machine = self.state_machine.clone().transition(Event::Run);
     }
 
     pub(super) fn slide(&mut self) {
-        self.state_machine = self.state_machine.transition(Event::Slide);
+        self.state_machine = self.state_machine.clone().transition(Event::Slide);
     }
 
     pub(super) fn jump(&mut self) {
-        self.state_machine = self.state_machine.transition(Event::Jump);
+        self.state_machine = self.state_machine.clone().transition(Event::Jump);
     }
 
     pub(super) fn land_on(&mut self, position: i16) {
-        self.state_machine = self.state_machine.transition(Event::Land { position });
+        self.state_machine = self
+            .state_machine
+            .clone()
+            .transition(Event::Land { position });
     }
 
     pub(super) fn knock_out(&mut self) {
-        self.state_machine = self.state_machine.transition(Event::KnockOut);
+        self.state_machine = self.state_machine.clone().transition(Event::KnockOut);
     }
 }
 
@@ -121,7 +129,7 @@ enum Event {
     Update,
 }
 
-#[derive(Debug, Clone, Copy, derive_more::From)]
+#[derive(Debug, Clone, derive_more::From)]
 enum StateMachine {
     Idle(State<Idle>),
     Running(State<Running>),
@@ -166,7 +174,7 @@ impl StateMachine {
             (Self::Sliding(state), Event::Update) => state.update(),
             (Self::Jumping(state), Event::Update) => state.update(),
             (Self::Falling(state), Event::Update) => state.update(),
-            _ => self,
+            (this, _) => this,
         }
     }
 
@@ -176,7 +184,10 @@ impl StateMachine {
 }
 
 mod states {
-    use crate::{engine::Point, game::HEIGHT};
+    use crate::{
+        engine::{Audio, Point, Sound},
+        game::HEIGHT,
+    };
 
     use super::{Frame, StateMachine};
 
@@ -192,7 +203,7 @@ mod states {
         const FRAME_NAME: &'static str;
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone)]
     pub(super) struct State<S> {
         context: Context,
         _state: S,
@@ -241,7 +252,7 @@ mod states {
     pub(super) struct Idle;
 
     impl State<Idle> {
-        pub(super) fn new() -> Self {
+        pub(super) fn new(audio: Audio, jump_sound: Sound) -> Self {
             Self {
                 context: Context {
                     frame_config: &IDLE,
@@ -252,6 +263,8 @@ mod states {
                     },
                     velocity: Point { x: 0, y: 0 },
                     hold_state: false,
+                    audio,
+                    jump_sound,
                 },
                 _state: Idle,
             }
@@ -285,7 +298,8 @@ mod states {
                 context: self
                     .context
                     .set_vertical_velocity(JUMP_SPEED)
-                    .reset_frame(&JUMP),
+                    .reset_frame(&JUMP)
+                    .play_jump_sound(),
                 _state: Jumping,
             }
             .into()
@@ -419,13 +433,15 @@ mod states {
     #[derive(Debug, Clone, Copy)]
     pub(super) struct KnockedOut;
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone)]
     struct Context {
         frame_config: &'static FrameConfig,
         frame: u8,
         position: Point,
         velocity: Point,
         hold_state: bool,
+        audio: Audio,
+        jump_sound: Sound,
     }
 
     impl Context {
@@ -478,6 +494,13 @@ mod states {
             self.velocity.x = 0;
             if self.velocity.y < 0 {
                 self.velocity.y = 0;
+            }
+            self
+        }
+
+        fn play_jump_sound(self) -> Self {
+            if let Err(err) = self.audio.play_sound(&self.jump_sound) {
+                log!("Error playing jump sound: {err:#?}");
             }
             self
         }

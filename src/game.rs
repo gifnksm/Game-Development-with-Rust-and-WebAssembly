@@ -7,7 +7,7 @@ use web_sys::HtmlImageElement;
 
 use crate::{
     browser,
-    engine::{self, Cell, Game, Image, KeyState, Point, Rect, Renderer, Sheet, SpriteSheet},
+    engine::{self, Audio, Cell, Game, Image, KeyState, Point, Rect, Renderer, Sheet, SpriteSheet},
     segments::SEGMENT_GENERATORS,
 };
 
@@ -69,10 +69,17 @@ impl Game for WalkTheDog {
     async fn initialize(&self) -> Result<Box<dyn Game>> {
         match self {
             Self::Loading => {
+                let audio = Audio::new()?;
+                let background_music = audio.load_sound("background_song.mp3").await?;
+                audio.play_looping_sound(&background_music)?;
+
                 let rhb_json = browser::fetch_json("rhb.json").await?;
                 let rhb_sheet: Sheet = serde_wasm_bindgen::from_value(rhb_json).map_err(|err| {
                     anyhow!("could not convert `rhb.json` into a `Sheet` structure: {err:#?}")
                 })?;
+                let image = engine::load_image("rhb.png").await?;
+                let sound = audio.load_sound("SFX_Jump_23.mp3").await?;
+                let rhb = RedHatBoy::new(rhb_sheet, image, audio, sound);
 
                 let background = engine::load_image("BG.png").await?;
                 let stone = engine::load_image("Stone.png").await?;
@@ -85,8 +92,6 @@ impl Game for WalkTheDog {
                     engine::load_image("tiles.png").await?,
                 ));
 
-                let image = engine::load_image("rhb.png").await?;
-                let rhb = RedHatBoy::new(rhb_sheet, image);
                 let background_width = background.width() as i16;
                 let backgrounds = [
                     Image::new(background.clone(), Point { x: 0, y: 0 }),
