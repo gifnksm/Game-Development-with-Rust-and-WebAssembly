@@ -33,7 +33,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - run: npm install
       - run: npm test -- --chrome
-      - run: npm run build
+      - run: npm run build -- --mode production
       - name: Deploy to Netlify
         uses: nwtgck/actions-netlify@v2.0
         with:
