@@ -1,3 +1,7 @@
+# Game-Development-with-Rust-and-WebAssembly
+
+Walk the dog game
+
 ## How to install
 
 ```sh
