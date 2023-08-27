@@ -1,6 +1,6 @@
 # Game-Development-with-Rust-and-WebAssembly
 
-Walk the dog game
+[Walk the dog game](https://walk-the-dog.netlify.app/)
 
 ## How to install
 
