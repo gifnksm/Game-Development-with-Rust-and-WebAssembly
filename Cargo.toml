@@ -56,4 +56,5 @@ features = [
 
 # These crates are used for running unit tests.
 [dev-dependencies]
+web-sys = { version = "0.3.55", features = ["AudioBufferOptions"] }
 wasm-bindgen-test = "0.3.28"

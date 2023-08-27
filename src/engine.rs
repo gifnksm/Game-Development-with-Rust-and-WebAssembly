@@ -19,7 +19,7 @@ use web_sys::{
 };
 
 use crate::{
-    browser::{self, LoopClosure},
+    browser,
     sound::{self, Looping},
 };
 
@@ -32,13 +32,17 @@ pub(crate) async fn load_image(source: &str) -> Result<HtmlImageElement> {
 
     let success_callback = browser::closure_once(move || {
         if let Some(success_tx) = success_tx.lock().ok().and_then(|mut opt| opt.take()) {
-            success_tx.send(Ok(()));
+            if let Err(err) = success_tx.send(Ok(())) {
+                error!("error sending success_tx: {err:#?}");
+            }
         }
     });
 
     let error_callback: Closure<dyn FnMut(JsValue)> = browser::closure_once(move |err| {
         if let Some(error_tx) = error_tx.lock().ok().and_then(|mut opt| opt.take()) {
-            error_tx.send(Err(anyhow!("error loading image: {err:#?}")));
+            if let Err(err) = error_tx.send(Err(anyhow!("error loading image: {err:#?}"))) {
+                error!("error sending error_tx: {err:#?}");
+            }
         }
     });
 
@@ -66,8 +70,6 @@ pub(crate) struct GameLoop {
     accumulated_delta: f32,
 }
 
-type SharedLoopClosure = Rc<RefCell<Option<LoopClosure>>>;
-
 impl GameLoop {
     pub async fn start(game: impl Game + 'static) -> Result<()> {
         let mut keyevent_receiver = prepare_input()?;
@@ -85,7 +87,10 @@ impl GameLoop {
         let mut keystate = KeyState::new();
         *g.borrow_mut() = Some(browser::create_raf_closure(move |perf| {
             process_input(&mut keystate, &mut keyevent_receiver);
-            game_loop.accumulated_delta += (perf - game_loop.last_frame) as f32;
+
+            let frame_time = perf - game_loop.last_frame;
+            game_loop.accumulated_delta += frame_time as f32;
+
             while game_loop.accumulated_delta > FRAME_SIZE {
                 game.update(&keystate);
                 game_loop.accumulated_delta -= FRAME_SIZE;
@@ -93,7 +98,15 @@ impl GameLoop {
             game_loop.last_frame = perf;
             game.draw(&renderer);
 
-            browser::request_animation_frame(f.borrow().as_ref().unwrap());
+            if renderer.debug_mode.get() {
+                unsafe {
+                    draw_frame_rate(&renderer, frame_time);
+                }
+            }
+
+            if let Err(err) = browser::request_animation_frame(f.borrow().as_ref().unwrap()) {
+                error!("error requesting animation frame: {err:#?}");
+            }
         }));
 
         browser::request_animation_frame(
@@ -218,14 +231,26 @@ impl Renderer {
             .expect("error drawing image");
     }
 
+    pub(crate) fn draw_rect(&self, rect: &Rect) {
+        self.context.stroke_rect(
+            rect.x().into(),
+            rect.y().into(),
+            rect.width.into(),
+            rect.height.into(),
+        );
+    }
+
+    pub(crate) fn draw_text(&self, test: &str, location: &Point) -> Result<()> {
+        self.context.set_font("16pt serif");
+        self.context
+            .fill_text(test, location.x.into(), location.y.into())
+            .map_err(|err| anyhow!("error drawing text: {err:#?}"))?;
+        Ok(())
+    }
+
     pub(crate) fn draw_bounding_box(&self, rect: &Rect) {
         if self.debug_mode.get() {
-            self.context.stroke_rect(
-                rect.x().into(),
-                rect.y().into(),
-                rect.width.into(),
-                rect.height.into(),
-            );
+            self.draw_rect(rect);
         }
     }
 }
@@ -237,20 +262,26 @@ enum KeyPress {
 }
 
 fn prepare_input() -> Result<UnboundedReceiver<KeyPress>> {
-    let (keydonw_sender, keyevent_receiver) = unbounded();
-    let keydown_sender = Rc::new(RefCell::new(keydonw_sender));
+    let (keydown_sender, keyevent_receiver) = unbounded();
+    let keydown_sender = Rc::new(RefCell::new(keydown_sender));
     let keyup_sender = Rc::clone(&keydown_sender);
 
     let onkeydown = browser::closure_wrap(Box::new(move |keycode| {
-        keydown_sender
+        if let Err(err) = keydown_sender
             .borrow_mut()
-            .start_send(KeyPress::KeyDown(keycode));
+            .start_send(KeyPress::KeyDown(keycode))
+        {
+            error!("error sending keydown event: {err:#?}");
+        }
     }) as Box<dyn FnMut(KeyboardEvent)>);
 
     let onkeyup = browser::closure_wrap(Box::new(move |keycode| {
-        keyup_sender
+        if let Err(err) = keyup_sender
             .borrow_mut()
-            .start_send(KeyPress::KeyUp(keycode));
+            .start_send(KeyPress::KeyUp(keycode))
+        {
+            error!("error sending keyup event: {err:#?}");
+        }
     }) as Box<dyn FnMut(KeyboardEvent)>);
 
     browser::canvas()?.set_onkeydown(Some(onkeydown.as_ref().unchecked_ref()));
@@ -273,6 +304,7 @@ fn process_input(state: &mut KeyState, keyevent_receiver: &mut UnboundedReceiver
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct KeyState {
     pressed_keys: HashMap<String, KeyboardEvent>,
 }
@@ -416,9 +448,113 @@ impl Audio {
 pub(crate) fn add_click_handler(elem: HtmlElement) -> UnboundedReceiver<()> {
     let (mut click_sender, click_receiver) = unbounded();
     let on_click = browser::closure_wrap(Box::new(move || {
-        click_sender.start_send(());
+        if let Err(err) = click_sender.start_send(()) {
+            error!("error sending click event: {err:#?}");
+        }
     }) as Box<dyn FnMut()>);
     elem.set_onclick(Some(on_click.as_ref().unchecked_ref()));
     on_click.forget();
     click_receiver
+}
+
+unsafe fn draw_frame_rate(renderer: &Renderer, frame_time: f64) {
+    static mut FRAMES_COUNTED: i32 = 0;
+    static mut TOTAL_FRAME_TIME: f64 = 0.0;
+    static mut FRAME_RATE: i32 = 0;
+
+    FRAMES_COUNTED += 1;
+    TOTAL_FRAME_TIME += frame_time;
+
+    if TOTAL_FRAME_TIME > 1000.0 {
+        FRAME_RATE = FRAMES_COUNTED;
+        TOTAL_FRAME_TIME = 0.0;
+        FRAMES_COUNTED = 0;
+    }
+
+    if let Err(err) = renderer.draw_text(
+        &format!("Frame Rate {FRAME_RATE}"),
+        &Point { x: 400, y: 100 },
+    ) {
+        error!("error drawing frame rate: {err:#?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_rects_that_intersect_on_the_left() {
+        let rect1 = Rect {
+            position: Point { x: 10, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        let rect2 = Rect {
+            position: Point { x: 0, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        assert!(rect2.intersects(&rect1))
+    }
+
+    #[test]
+    fn two_rects_that_intersect_on_the_right() {
+        let rect1 = Rect {
+            position: Point { x: 10, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        let rect2 = Rect {
+            position: Point { x: 90, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        assert!(rect2.intersects(&rect1))
+    }
+
+    #[test]
+    fn two_rects_that_intersect_on_the_top() {
+        let rect1 = Rect {
+            position: Point { x: 10, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        let rect2 = Rect {
+            position: Point { x: 10, y: 0 },
+            height: 100,
+            width: 100,
+        };
+        assert!(rect2.intersects(&rect1))
+    }
+
+    #[test]
+    fn two_rects_that_intersect_on_the_bottom() {
+        let rect1 = Rect {
+            position: Point { x: 10, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        let rect2 = Rect {
+            position: Point { x: 10, y: 90 },
+            height: 100,
+            width: 100,
+        };
+        assert!(rect2.intersects(&rect1))
+    }
+
+    #[test]
+    fn two_rects_that_does_not_intersect() {
+        let rect1 = Rect {
+            position: Point { x: 10, y: 10 },
+            height: 100,
+            width: 100,
+        };
+        let rect2 = Rect {
+            position: Point { x: 110, y: 110 },
+            height: 100,
+            width: 100,
+        };
+        assert!(!rect2.intersects(&rect1))
+    }
 }

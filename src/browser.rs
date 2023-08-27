@@ -17,6 +17,12 @@ macro_rules! log {
     }
 }
 
+macro_rules! error {
+    ($($t:tt)*) => {
+        web_sys::console::error_1(&format!( $($t)*).into());
+    }
+}
+
 pub(crate) fn window() -> Result<Window> {
     web_sys::window().ok_or_else(|| anyhow!("no global `window` exists"))
 }
@@ -156,4 +162,18 @@ pub(crate) fn hide_ui() -> Result<()> {
             .map_err(|err| anyhow!("error focusing canvas: {err:#?}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    async fn test_error_loading_json() {
+        let json = fetch_json("not_there.json").await;
+        assert!(json.is_err());
+    }
 }

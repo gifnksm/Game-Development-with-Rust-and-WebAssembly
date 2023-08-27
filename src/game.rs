@@ -3,7 +3,7 @@ use std::{fmt::Debug, rc::Rc};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::channel::mpsc::UnboundedReceiver;
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use rand::{seq::SliceRandom, thread_rng};
 use web_sys::HtmlImageElement;
 
 use crate::{
@@ -38,6 +38,7 @@ impl WalkTheDogStateMachine {
     }
 
     fn update(self, keystate: &KeyState) -> Self {
+        log!("Keystate is {keystate:#?}");
         match self {
             WalkTheDogStateMachine::Ready(state) => state.update(keystate),
             WalkTheDogStateMachine::Walking(state) => state.update(keystate),
@@ -185,7 +186,9 @@ impl WalkTheDogState<GameOver> {
     }
 
     fn new_game(self) -> WalkTheDogStateMachine {
-        browser::hide_ui();
+        if let Err(err) = browser::hide_ui() {
+            error!("error hiding UI: {err:#?}");
+        }
         WalkTheDogState {
             _state: Ready,
             walk: Walk::reset(self.walk),
@@ -206,6 +209,55 @@ pub(crate) struct Walk {
 }
 
 impl Walk {
+    async fn new() -> Result<Self> {
+        let audio = Audio::new()?;
+        let background_music = audio.load_sound("sounds/background_song.mp3").await?;
+        audio.play_looping_sound(&background_music)?;
+
+        let rhb_json = browser::fetch_json("sprites_sheets/rhb.json").await?;
+        let rhb_sheet: Sheet = serde_wasm_bindgen::from_value(rhb_json).map_err(|err| {
+            anyhow!("could not convert `rhb.json` into a `Sheet` structure: {err:#?}")
+        })?;
+        let image = engine::load_image("sprites_sheets/rhb.png").await?;
+        let sound = audio.load_sound("sounds/SFX_Jump_23.mp3").await?;
+        let rhb = RedHatBoy::new(rhb_sheet, image, audio, sound);
+
+        let background = engine::load_image("images/BG.png").await?;
+        let stone = engine::load_image("images/Stone.png").await?;
+
+        let obstacle_json = browser::fetch_json("sprites_sheets/tiles.json").await?;
+        let obstacle_sheet = Rc::new(SpriteSheet::new(
+            serde_wasm_bindgen::from_value(obstacle_json).map_err(|err| {
+                anyhow!("could not convert `tiles.json` into a `Sheet` structure: {err:#?}")
+            })?,
+            engine::load_image("sprites_sheets/tiles.png").await?,
+        ));
+
+        let background_width = background.width() as i16;
+        let backgrounds = [
+            Image::new(background.clone(), Point { x: 0, y: 0 }),
+            Image::new(
+                background,
+                Point {
+                    x: background_width,
+                    y: 0,
+                },
+            ),
+        ];
+
+        let mut walk = Walk {
+            debug_mode: cfg!(debug_assertions),
+            boy: rhb,
+            backgrounds,
+            obstacles: vec![],
+            obstacle_sheet,
+            stone,
+            timeline: 0,
+        };
+        walk.generate_next_segment();
+        Ok(walk)
+    }
+
     fn reset(mut walk: Self) -> Self {
         walk.obstacles = vec![];
         walk.timeline = 0;
@@ -261,52 +313,7 @@ impl Game for WalkTheDog {
     async fn initialize(&self) -> Result<Box<dyn Game>> {
         match self.machine {
             None => {
-                let audio = Audio::new()?;
-                let background_music = audio.load_sound("sounds/background_song.mp3").await?;
-                audio.play_looping_sound(&background_music)?;
-
-                let rhb_json = browser::fetch_json("sprites_sheets/rhb.json").await?;
-                let rhb_sheet: Sheet = serde_wasm_bindgen::from_value(rhb_json).map_err(|err| {
-                    anyhow!("could not convert `rhb.json` into a `Sheet` structure: {err:#?}")
-                })?;
-                let image = engine::load_image("sprites_sheets/rhb.png").await?;
-                let sound = audio.load_sound("sounds/SFX_Jump_23.mp3").await?;
-                let rhb = RedHatBoy::new(rhb_sheet, image, audio, sound);
-
-                let background = engine::load_image("images/BG.png").await?;
-                let stone = engine::load_image("images/Stone.png").await?;
-
-                let obstacle_json = browser::fetch_json("sprites_sheets/tiles.json").await?;
-                let obstacle_sheet = Rc::new(SpriteSheet::new(
-                    serde_wasm_bindgen::from_value(obstacle_json).map_err(|err| {
-                        anyhow!("could not convert `tiles.json` into a `Sheet` structure: {err:#?}")
-                    })?,
-                    engine::load_image("sprites_sheets/tiles.png").await?,
-                ));
-
-                let background_width = background.width() as i16;
-                let backgrounds = [
-                    Image::new(background.clone(), Point { x: 0, y: 0 }),
-                    Image::new(
-                        background,
-                        Point {
-                            x: background_width,
-                            y: 0,
-                        },
-                    ),
-                ];
-
-                let mut walk = Walk {
-                    debug_mode: cfg!(debug_assertions),
-                    boy: rhb,
-                    backgrounds,
-                    obstacles: vec![],
-                    obstacle_sheet,
-                    stone,
-                    timeline: 0,
-                };
-                walk.generate_next_segment();
-
+                let walk = Walk::new().await?;
                 let machine = WalkTheDogStateMachine::new(walk);
                 Ok(Box::new(Self {
                     machine: Some(machine),
@@ -472,3 +479,70 @@ fn rightmost(obstacle_list: &[Box<dyn Obstacle>]) -> i16 {
         .max()
         .unwrap_or(0)
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use futures::channel::mpsc::unbounded;
+//     use std::collections::HashMap;
+//     use web_sys::AudioBufferOptions;
+
+//     use wasm_bindgen_test::wasm_bindgen_test;
+
+//     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+//     #[wasm_bindgen_test]
+//     async fn test_transition_from_game_over_to_new_game() {
+//         let (_, receiver) = unbounded();
+
+//         let image = HtmlImageElement::new().unwrap();
+//         let audio = Audio::new().unwrap();
+//         let options = AudioBufferOptions::new(1, 8000.0);
+//         let sound = audio.load_sound_from_options(&options).unwrap();
+//         let rhb = RedHatBoy::new(
+//             Sheet {
+//                 frames: HashMap::new(),
+//             },
+//             image.clone(),
+//             audio,
+//             sound,
+//         );
+//         let sprite_sheet = SpriteSheet::new(
+//             Sheet {
+//                 frames: HashMap::new(),
+//             },
+//             image.clone(),
+//         );
+//         let walk = Walk {
+//             boy: rhb,
+//             backgrounds: [
+//                 Image::new(image.clone(), Point { x: 0, y: 0 }),
+//                 Image::new(image.clone(), Point { x: 0, y: 0 }),
+//             ],
+//             obstacles: vec![],
+//             obstacle_sheet: Rc::new(sprite_sheet),
+//             stone: image.clone(),
+//             timeline: 0,
+//             debug_mode: false,
+//         };
+
+//         let document = browser::document().unwrap();
+//         document
+//             .body()
+//             .unwrap()
+//             .insert_adjacent_html("afterbegin", "<div id='ui'></div>")
+//             .unwrap();
+//         browser::draw_ui("<p>This is the UI</p>").unwrap();
+//         let state = WalkTheDogState {
+//             _state: GameOver {
+//                 new_game_event: receiver,
+//             },
+//             walk,
+//         };
+
+//         state.new_game();
+
+//         let ui = browser::find_html_element_by_id("ui").unwrap();
+//         assert_eq!(ui.child_element_count(), 0);
+//     }
+// }
